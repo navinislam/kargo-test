@@ -1,0 +1,1115 @@
+(() => {
+  // Keep everything namespaced under a predictable global for idempotent reloads.
+  const GLOBAL_NS = "__kargoInterviewAds";
+
+  // Centralized configuration so interviewers can see integration details at a glance.
+  const CONFIG = {
+    endpoint: "https://storage.cloud.kargo.com/ad/campaign/rm/test/interview-creatives.json",
+    toolId: "kargo-ad-tool",
+    styleId: "kargo-ad-tool-style",
+    debugId: "kargo-debug-console",
+    stickyHostClass: "kargo-interview-sticky-host",
+    wrapperPrefix: "kargo-interview-ad",
+    scriptFallback: "script.js",
+    scriptFileName: "script.js",
+    fetchTimeoutMs: 8000,
+    maxObserverMs: 5000,
+    maxLogEntries: 40,
+    targetSites: [
+      {
+        label: "Distractify – Trisha Paytas article",
+        url: "https://www.distractify.com/p/trisha-paytas-broadway-show"
+      },
+      {
+        label: "Cookie and Kate – Chickpea Tomato Soup",
+        url: "https://cookieandkate.com/chickpea-tomato-soup-recipe/"
+      }
+    ],
+    anchorSelectors: [
+      "main article",
+      "article",
+      "main",
+      "[role='main']",
+      ".post-content",
+      ".post__content",
+      ".entry-content",
+      ".content",
+      "#content"
+    ],
+    storageKeys: {
+      stickyDismissed: "kargoInterviewStickyDismissed"
+    }
+  };
+
+  const existingNamespace = window[GLOBAL_NS] || {};
+  if (existingNamespace.initialized) {
+    // Script already bootstrapped; surface a friendly hint and bail out.
+    if (existingNamespace.ui?.status) {
+      existingNamespace.ui.status.textContent = "Kargo ad injector already mounted.";
+    }
+    return;
+  }
+
+  const globalState = window[GLOBAL_NS] = existingNamespace;
+  Object.assign(globalState, {
+    initialized: true,
+    wrappers: [],
+    observers: [],
+    stickyHost: null,
+    log: [],
+    metrics: {
+      runs: 0,
+      lastInjectedCount: 0,
+      middleViaObserver: 0,
+      stickyDismissals: Number(sessionStorage.getItem(CONFIG.storageKeys.stickyDismissed)) || 0
+    },
+    flags: {
+      stickyDismissed: sessionStorage.getItem(CONFIG.storageKeys.stickyDismissed) === "true"
+    },
+    locks: {
+      injecting: false
+    },
+    listeners: {},
+    ui: {},
+    scriptEl: null,
+    scriptSrc: null,
+    autoInject: false
+  });
+
+  // Utility: convert a number to a pixel string for inline sizing.
+  const px = (value) => `${value}px`;
+
+  // Utility: narrow visibility checks so we only anchor on visible nodes.
+  const isVisiblyRendered = (node) => {
+    if (!(node instanceof HTMLElement)) return false;
+    if (node.hidden) return false;
+    if (node.offsetParent === null && node !== document.body) return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+
+  // Utility: produce a consistent timestamp string for logs.
+  const timestamp = () => new Date().toISOString();
+
+  // Utility: create a friendly string for telemetry payloads.
+  const formatDetail = (detail) => {
+    try {
+      return JSON.stringify(detail, null, 2);
+    } catch (error) {
+      return String(detail);
+    }
+  };
+
+  // Utility: ensure MutationObservers are tracked and cleaned up.
+  function trackObserver(observer) {
+    globalState.observers.push(observer);
+    return () => {
+      observer.disconnect();
+      const index = globalState.observers.indexOf(observer);
+      if (index >= 0) {
+        globalState.observers.splice(index, 1);
+      }
+    };
+  }
+
+  // Centralized telemetry so the debug console, console logs, and status stay consistent.
+  function logTelemetry(event, detail = {}) {
+    const entry = {
+      event,
+      detail,
+      time: timestamp()
+    };
+    globalState.log.push(entry);
+    if (globalState.log.length > CONFIG.maxLogEntries) {
+      globalState.log.shift();
+    }
+    console.debug("[KargoInjector]", event, detail);
+    renderDebugConsole();
+  }
+
+  // Locate the <script> node that loaded this file so we can read data attributes.
+  function findOwnScriptTag() {
+    if (globalState.scriptEl && document.contains(globalState.scriptEl)) {
+      return globalState.scriptEl;
+    }
+    const current = document.currentScript;
+    if (current && current.src && current.src.split("?")[0].endsWith(CONFIG.scriptFileName)) {
+      globalState.scriptEl = current;
+      return current;
+    }
+    const match = Array.from(document.querySelectorAll("script")).find((tag) => {
+      return typeof tag.src === "string" && tag.src.split("?")[0].endsWith(CONFIG.scriptFileName);
+    });
+    if (match) {
+      globalState.scriptEl = match;
+      return match;
+    }
+    return null;
+  }
+
+  // Determine an absolute URL for this script so we can build snippets/bookmarklets.
+  function computeScriptSrc() {
+    const scriptTag = findOwnScriptTag();
+    if (scriptTag?.src) {
+      return scriptTag.src;
+    }
+    // Fall back to an absolute URL relative to the current page.
+    return new URL(CONFIG.scriptFallback, window.location.href).href;
+  }
+
+  // Detect whether the integrator requested automatic injection via attribute or query param.
+  function computeAutoInjectPreference(scriptTag) {
+    if (!scriptTag) {
+      return false;
+    }
+    if (scriptTag.hasAttribute("data-auto-inject")) {
+      const value = scriptTag.getAttribute("data-auto-inject");
+      return value === "" || value === "true" || value === "1";
+    }
+    if (scriptTag.src) {
+      try {
+        const url = new URL(scriptTag.src, window.location.href);
+        if (url.searchParams.has("autoInject")) {
+          const param = url.searchParams.get("autoInject");
+          if (param === null || param === "") return true;
+          return !["0", "false", "no"].includes(param.toLowerCase());
+        }
+      } catch (error) {
+        console.debug("Unable to parse script src for autoInject flag", error);
+      }
+    }
+    return false;
+  }
+
+  // Inject the shared CSS exactly once to keep the DOM clean.
+  function injectBaseStyles() {
+    if (document.getElementById(CONFIG.styleId)) {
+      return;
+    }
+    const style = document.createElement("style");
+    style.id = CONFIG.styleId;
+    style.textContent = `
+      #${CONFIG.toolId} {
+        position: fixed;
+        left: 50%;
+        bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+        transform: translateX(-50%);
+        z-index: 2147483600;
+        display: grid;
+        gap: 12px;
+        padding: 16px;
+        border-radius: 18px;
+        background: rgba(15, 23, 42, 0.88);
+        backdrop-filter: blur(10px);
+        color: #f8fafc;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        font-size: 15px;
+        box-shadow: 0 25px 60px rgba(15, 23, 42, 0.35);
+        width: min(92vw, 360px);
+      }
+
+      #${CONFIG.toolId} button,
+      #${CONFIG.toolId} select {
+        font: inherit;
+      }
+
+      #${CONFIG.toolId} button {
+        appearance: none;
+        border: none;
+        border-radius: 999px;
+        padding: 12px 18px;
+        font-weight: 600;
+        background: linear-gradient(135deg, #ff8a00, #ff3d00);
+        color: #fff;
+        cursor: pointer;
+        transition: transform 0.2s ease, opacity 0.2s ease;
+      }
+
+      #${CONFIG.toolId} button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      #${CONFIG.toolId} button:active {
+        transform: scale(0.96);
+      }
+
+      #${CONFIG.toolId} .kargo-tool__secondary {
+        background: rgba(59, 130, 246, 0.18);
+        color: #bfdbfe;
+      }
+
+      #${CONFIG.toolId} .kargo-tool__secondary:hover:not(:disabled) {
+        background: rgba(59, 130, 246, 0.25);
+      }
+
+      #${CONFIG.toolId} .kargo-tool__status {
+        min-height: 1.4em;
+        text-align: center;
+        font-size: 13px;
+        color: #bae6fd;
+      }
+
+      #${CONFIG.toolId} .kargo-tool__status[data-variant="error"] {
+        color: #fecaca;
+      }
+
+      #${CONFIG.toolId} .kargo-tool__status[data-variant="success"] {
+        color: #bbf7d0;
+      }
+
+      #${CONFIG.toolId} .kargo-tool__drawer {
+        display: grid;
+        gap: 10px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(148, 163, 184, 0.28);
+      }
+
+      #${CONFIG.toolId} .kargo-tool__drawer[hidden] {
+        display: none;
+      }
+
+      #${CONFIG.toolId} label {
+        display: grid;
+        gap: 4px;
+        font-size: 13px;
+        color: rgba(226, 232, 240, 0.88);
+      }
+
+      #${CONFIG.toolId} select {
+        border-radius: 10px;
+        border: 1px solid rgba(148, 163, 184, 0.4);
+        padding: 8px 10px;
+        background: rgba(15, 23, 42, 0.45);
+        color: inherit;
+      }
+
+      #${CONFIG.toolId} .kargo-tool__actions {
+        display: grid;
+        gap: 8px;
+      }
+
+      #${CONFIG.toolId} .kargo-tool__muted {
+        font-size: 12px;
+        text-align: center;
+        color: rgba(226, 232, 240, 0.65);
+      }
+
+      #${CONFIG.toolId} .kargo-tool__more {
+        background: rgba(100, 116, 139, 0.22);
+        color: #f1f5f9;
+      }
+
+      #${CONFIG.debugId} {
+        position: fixed;
+        right: 16px;
+        bottom: calc(120px + env(safe-area-inset-bottom, 0px));
+        width: min(92vw, 360px);
+        max-height: 60vh;
+        overflow: hidden;
+        display: none;
+        flex-direction: column;
+        gap: 12px;
+        padding: 16px;
+        border-radius: 16px;
+        background: rgba(15, 23, 42, 0.92);
+        color: #f8fafc;
+        z-index: 2147483601;
+        box-shadow: 0 20px 50px rgba(15, 23, 42, 0.5);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      }
+
+      #${CONFIG.debugId}[data-visible="true"] {
+        display: flex;
+      }
+
+      #${CONFIG.debugId} header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 14px;
+      }
+
+      #${CONFIG.debugId} .kargo-debug__close {
+        background: rgba(71, 85, 105, 0.42);
+        border: none;
+        border-radius: 12px;
+        color: inherit;
+        padding: 6px 10px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      #${CONFIG.debugId} .kargo-debug__metrics {
+        font-size: 12px;
+        color: rgba(226, 232, 240, 0.8);
+        line-height: 1.4;
+      }
+
+      #${CONFIG.debugId} .kargo-debug__list {
+        display: grid;
+        gap: 8px;
+        overflow-y: auto;
+        max-height: 38vh;
+        padding-right: 4px;
+      }
+
+      #${CONFIG.debugId} .kargo-debug__item {
+        border-radius: 12px;
+        padding: 10px;
+        background: rgba(51, 65, 85, 0.42);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      #${CONFIG.debugId} .kargo-debug__item pre {
+        margin: 6px 0 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .${CONFIG.wrapperPrefix} {
+        width: min(100%, 420px);
+        margin: 22px auto;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        transition: transform 0.24s ease, opacity 0.24s ease;
+      }
+
+      .${CONFIG.wrapperPrefix}[data-placement="middle"] {
+        animation: kargoFadeUp 320ms ease both;
+      }
+
+      .${CONFIG.wrapperPrefix}[data-placement="sticky"] {
+        width: min(100vw, 420px);
+        margin: 0;
+      }
+
+      .${CONFIG.wrapperPrefix} .kargo-interview-ad__frame {
+        position: relative;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        border-radius: 14px;
+        overflow: hidden;
+        background: #f8fafc;
+        padding: 10px;
+        box-shadow: 0 24px 45px rgba(15, 23, 42, 0.25);
+      }
+
+      .${CONFIG.wrapperPrefix} .kargo-interview-ad__frame > * {
+        width: 100%;
+        height: 100%;
+      }
+
+      .${CONFIG.wrapperPrefix} .kargo-interview-ad__wrapper {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        width: 100%;
+      }
+
+      .${CONFIG.wrapperPrefix} .kargo-interview-ad__close {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        border: none;
+        border-radius: 999px;
+        width: 30px;
+        height: 30px;
+        background: rgba(15, 23, 42, 0.9);
+        color: #fff;
+        cursor: pointer;
+        font-size: 16px;
+        line-height: 1;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2);
+      }
+
+      .${CONFIG.wrapperPrefix} iframe,
+      .${CONFIG.wrapperPrefix} img,
+      .${CONFIG.wrapperPrefix} video {
+        max-width: 100%;
+        max-height: 100%;
+      }
+
+      .${CONFIG.stickyHostClass} {
+        position: fixed;
+        left: 50%;
+        bottom: calc(0px + env(safe-area-inset-bottom, 0px));
+        transform: translateX(-50%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        padding: 12px;
+        z-index: 2147483605;
+        pointer-events: none;
+        width: min(100vw, 440px);
+        animation: kargoSlideUp 280ms ease both;
+      }
+
+      .${CONFIG.stickyHostClass} .${CONFIG.wrapperPrefix} {
+        pointer-events: auto;
+      }
+
+      @keyframes kargoSlideUp {
+        from {
+          transform: translate(-50%, 20px);
+          opacity: 0;
+        }
+        to {
+          transform: translate(-50%, 0);
+          opacity: 1;
+        }
+      }
+
+      @keyframes kargoFadeUp {
+        from {
+          transform: translateY(16px);
+          opacity: 0;
+        }
+        to {
+          transform: translateY(0);
+          opacity: 1;
+        }
+      }
+
+      @media (max-width: 540px) {
+        #${CONFIG.toolId} {
+          width: min(94vw, 340px);
+          gap: 10px;
+        }
+        .${CONFIG.wrapperPrefix} .kargo-interview-ad__frame {
+          padding: 6px;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // Build the floating control panel that drives the workflow.
+  function ensureControlPanel() {
+    let panel = document.getElementById(CONFIG.toolId);
+    if (!panel) {
+      panel = document.createElement("section");
+      panel.id = CONFIG.toolId;
+      panel.className = "kargo-tool";
+      const options = CONFIG.targetSites.map((site) => {
+        return `<option value="${site.url}">${site.label}</option>`;
+      }).join("");
+      panel.innerHTML = `
+        <button type="button" class="kargo-tool__inject" data-role="inject">Inject Ads</button>
+        <div class="kargo-tool__status" data-role="status" role="status" aria-live="polite">Bootstrapping…</div>
+        <button type="button" class="kargo-tool__more kargo-tool__secondary" data-role="more" aria-expanded="false">More tools</button>
+        <div class="kargo-tool__drawer" data-role="drawer" hidden>
+          <label>
+            Target site
+            <select data-role="target">
+              ${options}
+            </select>
+          </label>
+          <div class="kargo-tool__actions">
+            <button type="button" class="kargo-tool__secondary" data-role="preview">Open selected site</button>
+            <button type="button" class="kargo-tool__secondary" data-role="snippet">Copy console snippet</button>
+            <button type="button" class="kargo-tool__secondary" data-role="bookmarklet">Copy bookmarklet</button>
+            <button type="button" class="kargo-tool__secondary" data-role="reset-sticky">Reset sticky dismissal</button>
+            <button type="button" class="kargo-tool__secondary" data-role="debug-toggle">Show debug log</button>
+          </div>
+          <p class="kargo-tool__muted">
+            Tip: Paste the snippet in a page console or drag the bookmarklet into your bookmarks bar.
+          </p>
+        </div>
+      `;
+      document.body.appendChild(panel);
+    }
+
+    const ui = {
+      panel,
+      status: panel.querySelector('[data-role="status"]'),
+      inject: panel.querySelector('[data-role="inject"]'),
+      more: panel.querySelector('[data-role="more"]'),
+      drawer: panel.querySelector('[data-role="drawer"]'),
+      target: panel.querySelector('[data-role="target"]'),
+      preview: panel.querySelector('[data-role="preview"]'),
+      snippet: panel.querySelector('[data-role="snippet"]'),
+      bookmarklet: panel.querySelector('[data-role="bookmarklet"]'),
+      debugToggle: panel.querySelector('[data-role="debug-toggle"]'),
+      resetSticky: panel.querySelector('[data-role="reset-sticky"]')
+    };
+
+    globalState.ui = ui;
+    bindControlEvents();
+    return panel;
+  }
+
+  // Attach event listeners once so repeated injections stay deterministic.
+  function bindControlEvents() {
+    const { inject, more, drawer, preview, snippet, bookmarklet, debugToggle, resetSticky } = globalState.ui;
+    if (!inject.dataset.listenerAttached) {
+      inject.dataset.listenerAttached = "true";
+      inject.addEventListener("click", handleInject);
+    }
+    if (!more.dataset.listenerAttached) {
+      more.dataset.listenerAttached = "true";
+      more.addEventListener("click", () => {
+        const expanded = more.getAttribute("aria-expanded") === "true";
+        if (expanded) {
+          drawer.hidden = true;
+          more.setAttribute("aria-expanded", "false");
+          more.textContent = "More tools";
+        } else {
+          drawer.hidden = false;
+          more.setAttribute("aria-expanded", "true");
+          more.textContent = "Hide tools";
+        }
+      });
+    }
+    if (!preview.dataset.listenerAttached) {
+      preview.dataset.listenerAttached = "true";
+      preview.addEventListener("click", () => {
+        const url = globalState.ui.target.value;
+        window.open(url, "_blank", "noopener");
+        logTelemetry("ui:preview-opened", { url });
+        setStatus("Opened target site in a new tab.", "info");
+      });
+    }
+    if (!snippet.dataset.listenerAttached) {
+      snippet.dataset.listenerAttached = "true";
+      snippet.addEventListener("click", async () => {
+        const snippetText = buildConsoleSnippet();
+        const success = await copyToClipboard(snippetText);
+        setStatus(success ? "Console snippet copied. Paste it into DevTools." : "Clipboard copy blocked by browser.", success ? "success" : "error");
+        logTelemetry("ui:snippet-copied", { success });
+      });
+    }
+    if (!bookmarklet.dataset.listenerAttached) {
+      bookmarklet.dataset.listenerAttached = "true";
+      bookmarklet.addEventListener("click", async () => {
+        const bookmarkletText = buildBookmarklet();
+        const success = await copyToClipboard(bookmarkletText);
+        setStatus(success ? "Bookmarklet copied. Drag it into your bookmarks bar." : "Clipboard copy blocked by browser.", success ? "success" : "error");
+        logTelemetry("ui:bookmarklet-copied", { success });
+      });
+    }
+    if (!debugToggle.dataset.listenerAttached) {
+      debugToggle.dataset.listenerAttached = "true";
+      debugToggle.addEventListener("click", () => {
+        const consoleEl = ensureDebugConsole();
+        const isVisible = consoleEl.getAttribute("data-visible") === "true";
+        toggleDebugConsole(!isVisible);
+      });
+    }
+    if (!resetSticky.dataset.listenerAttached) {
+      resetSticky.dataset.listenerAttached = "true";
+      resetSticky.addEventListener("click", () => {
+        rememberStickyDismissal(false);
+        setStatus("Sticky dismissal reset for this session.", "success");
+        logTelemetry("ui:sticky-dismissal-reset");
+      });
+    }
+  }
+
+  // Helper: update the primary status line with semantic color coding.
+  function setStatus(message, variant = "info") {
+    const status = globalState.ui.status;
+    if (!status) return;
+    status.textContent = message;
+    status.setAttribute("data-variant", variant);
+  }
+
+  // Helper: disable/enable interactive controls during network work.
+  function setBusy(isBusy) {
+    const { inject, preview, snippet, bookmarklet } = globalState.ui;
+    inject.disabled = isBusy;
+    inject.setAttribute("aria-busy", String(isBusy));
+    preview.disabled = isBusy;
+    snippet.disabled = isBusy;
+    bookmarklet.disabled = isBusy;
+  }
+
+  // Helper: copy text to clipboard with a textarea fallback for older browsers.
+  async function copyToClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (error) {
+        console.warn("Clipboard write failed; falling back", error);
+      }
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "true");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand("copy");
+      return true;
+    } catch (error) {
+      return false;
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+
+  // Assemble the console snippet that injects this script into a live page.
+  function buildConsoleSnippet() {
+    const src = globalState.scriptSrc;
+    return `
+(() => {
+  const existing = document.querySelector('script[src="${src}"]');
+  if (existing) return;
+  const tag = document.createElement("script");
+  tag.src = "${src}";
+  document.body.appendChild(tag);
+})();`.trim();
+  }
+
+  // Assemble a lightweight bookmarklet that appends this script to the current page.
+  function buildBookmarklet() {
+    const src = encodeURI(globalState.scriptSrc);
+    return `javascript:(()=>{if(window.${GLOBAL_NS})return;const s=document.createElement('script');s.src='${src}';document.body.appendChild(s);})();`;
+  }
+
+  // ensure we can toggle an on-page debug console without polluting the main UI.
+  function ensureDebugConsole() {
+    let consoleEl = document.getElementById(CONFIG.debugId);
+    if (!consoleEl) {
+      consoleEl = document.createElement("section");
+      consoleEl.id = CONFIG.debugId;
+      consoleEl.innerHTML = `
+        <header>
+          <strong>Ad Injector Debug</strong>
+          <button type="button" class="kargo-debug__close">Close</button>
+        </header>
+        <div class="kargo-debug__metrics"></div>
+        <div class="kargo-debug__list"></div>
+      `;
+      document.body.appendChild(consoleEl);
+      const closeButton = consoleEl.querySelector(".kargo-debug__close");
+      closeButton.addEventListener("click", () => toggleDebugConsole(false));
+    }
+    globalState.ui.debugConsole = consoleEl;
+    return consoleEl;
+  }
+
+  // Show or hide the debug console and adjust the toggle label to match the state.
+  function toggleDebugConsole(forceVisible) {
+    const consoleEl = ensureDebugConsole();
+    const isVisible = typeof forceVisible === "boolean" ? forceVisible : consoleEl.getAttribute("data-visible") !== "true";
+    consoleEl.setAttribute("data-visible", isVisible ? "true" : "false");
+    globalState.ui.debugToggle.textContent = isVisible ? "Hide debug log" : "Show debug log";
+    if (isVisible) {
+      renderDebugConsole();
+    }
+  }
+
+  // Refresh the debug console with the latest telemetry entries and metrics.
+  function renderDebugConsole() {
+    const consoleEl = globalState.ui.debugConsole;
+    if (!consoleEl || consoleEl.getAttribute("data-visible") !== "true") {
+      return;
+    }
+    const metricsEl = consoleEl.querySelector(".kargo-debug__metrics");
+    metricsEl.innerHTML = `
+      Runs: ${globalState.metrics.runs}<br>
+      Last injected: ${globalState.metrics.lastInjectedCount}<br>
+      Repositioned middles: ${globalState.metrics.middleViaObserver}<br>
+      Sticky dismissals: ${globalState.metrics.stickyDismissals}<br>
+      Sticky dismissed flag: ${globalState.flags.stickyDismissed}
+    `;
+    const listEl = consoleEl.querySelector(".kargo-debug__list");
+    listEl.innerHTML = globalState.log.slice().reverse().map((entry) => {
+      return `
+        <article class="kargo-debug__item">
+          <div><strong>${entry.event}</strong></div>
+          <div>${entry.time}</div>
+          <pre>${formatDetail(entry.detail)}</pre>
+        </article>
+      `;
+    }).join("");
+  }
+
+  // Decode HTML markup even when creatives include UTF-8 characters.
+  function decodeMarkup(markup) {
+    if (typeof markup !== "string") {
+      throw new Error("Invalid markup payload.");
+    }
+    try {
+      return atob(markup);
+    } catch (firstError) {
+      try {
+        const binary = window.atob(markup);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        if (window.TextDecoder) {
+          return new TextDecoder("utf-8").decode(bytes);
+        }
+        return binary;
+      } catch (error) {
+        throw new Error("Failed to decode markup");
+      }
+    }
+  }
+
+  // Parse a WxH string into numeric dimensions with sensible fallbacks.
+  function parseSize(rawSize) {
+    if (typeof rawSize !== "string") {
+      return { width: 320, height: 50 };
+    }
+    const [widthPart, heightPart] = rawSize.toLowerCase().split("x");
+    const width = Number.parseInt(widthPart, 10);
+    const height = Number.parseInt(heightPart, 10);
+    if (Number.isFinite(width) && Number.isFinite(height)) {
+      return { width, height };
+    }
+    return { width: 320, height: 50 };
+  }
+
+  // Reset prior ad placements, host containers, and observers before a fresh run.
+  function cleanupExistingAds() {
+    globalState.wrappers.forEach((node) => {
+      if (node?.parentNode) {
+        node.parentNode.removeChild(node);
+      }
+    });
+    globalState.wrappers = [];
+    globalState.observers.forEach((observer) => observer.disconnect());
+    globalState.observers = [];
+    if (globalState.stickyHost?.parentNode) {
+      globalState.stickyHost.parentNode.removeChild(globalState.stickyHost);
+    }
+    globalState.stickyHost = null;
+  }
+
+  // Ensure we have a single sticky host container anchored to the viewport bottom.
+  function ensureStickyHost() {
+    if (globalState.stickyHost && document.body.contains(globalState.stickyHost)) {
+      return globalState.stickyHost;
+    }
+    const host = document.createElement("div");
+    host.className = CONFIG.stickyHostClass;
+    host.setAttribute("role", "complementary");
+    host.setAttribute("aria-label", "Injected sticky advertisements");
+    document.body.appendChild(host);
+    globalState.stickyHost = host;
+    ensureEscapeListener();
+    return host;
+  }
+
+  // Listen for Escape so reviewers can quickly dismiss sticky ads without a mouse.
+  function ensureEscapeListener() {
+    if (globalState.listeners.keydown) {
+      return;
+    }
+    const handler = (event) => {
+      if (event.key === "Escape" && globalState.stickyHost?.childElementCount) {
+        logTelemetry("sticky:dismissed-escape");
+        rememberStickyDismissal(true);
+        cleanupStickyHost();
+        setStatus("Sticky ad dismissed.", "info");
+      }
+    };
+    document.addEventListener("keydown", handler);
+    globalState.listeners.keydown = handler;
+  }
+
+  // Remove the sticky host and clean references when no sticky ads remain.
+  function cleanupStickyHost() {
+    if (globalState.stickyHost?.parentNode) {
+      globalState.stickyHost.parentNode.removeChild(globalState.stickyHost);
+    }
+    globalState.stickyHost = null;
+  }
+
+  // Track dismissal preference in sessionStorage so refreshes respect the choice.
+  function rememberStickyDismissal(isDismissed) {
+    globalState.flags.stickyDismissed = isDismissed;
+    if (isDismissed) {
+      sessionStorage.setItem(CONFIG.storageKeys.stickyDismissed, "true");
+      globalState.metrics.stickyDismissals += 1;
+    } else {
+      sessionStorage.removeItem(CONFIG.storageKeys.stickyDismissed);
+    }
+    renderDebugConsole();
+  }
+
+  // Create a DOM wrapper for a creative with sizing and optional close controls.
+  function buildAdWrapper({ html, size, type, id }) {
+    const wrapper = document.createElement("div");
+    wrapper.className = CONFIG.wrapperPrefix;
+    wrapper.dataset.placement = type;
+    wrapper.dataset.creativeId = id;
+    wrapper.style.setProperty("--kargo-ad-width", px(size.width));
+    wrapper.style.setProperty("--kargo-ad-height", px(size.height));
+
+    const frame = document.createElement("div");
+    frame.className = "kargo-interview-ad__frame";
+    frame.style.width = px(size.width);
+    frame.style.height = px(size.height);
+
+    const inner = document.createElement("div");
+    inner.className = "kargo-interview-ad__wrapper";
+    inner.innerHTML = html;
+    frame.appendChild(inner);
+    wrapper.appendChild(frame);
+
+    if (type === "sticky") {
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "kargo-interview-ad__close";
+      close.setAttribute("aria-label", "Close ad");
+      close.textContent = "×";
+      close.addEventListener("click", () => {
+        rememberStickyDismissal(true);
+        removeWrapperFromState(wrapper);
+        wrapper.remove();
+        if (!globalState.stickyHost?.hasChildNodes()) {
+          cleanupStickyHost();
+        }
+        setStatus("Sticky ad closed.", "info");
+        logTelemetry("sticky:dismissed", { id });
+      });
+      wrapper.appendChild(close);
+    }
+
+    globalState.wrappers.push(wrapper);
+    return wrapper;
+  }
+
+  // Remove a wrapper from the global cache so repeat runs do not reference dead nodes.
+  function removeWrapperFromState(wrapper) {
+    const index = globalState.wrappers.indexOf(wrapper);
+    if (index >= 0) {
+      globalState.wrappers.splice(index, 1);
+    }
+  }
+
+  // Pick the most article-like container on the page using heuristics.
+  function findContentRoot() {
+    for (const selector of CONFIG.anchorSelectors) {
+      const node = document.querySelector(selector);
+      if (node) {
+        return node;
+      }
+    }
+    return document.body;
+  }
+
+  // Collect visible block-level children as candidates for mid-article insertion.
+  function collectCandidateBlocks(root) {
+    return Array.from(root.children).filter((child) => {
+      if (!child.tagName) return false;
+      if (!isVisiblyRendered(child)) return false;
+      return /^(ARTICLE|DIV|P|SECTION|H2|H3|LI)$/i.test(child.tagName);
+    });
+  }
+
+  // Try to position the wrapper after a midpoint node; return metadata for logging.
+  function tryInsertMiddle(root, wrapper) {
+    const blocks = collectCandidateBlocks(root);
+    if (blocks.length >= 3) {
+      const anchor = blocks[Math.floor(blocks.length / 2)];
+      anchor.parentNode.insertBefore(wrapper, anchor.nextSibling);
+      return {
+        success: true,
+        strategy: "visible-block-midpoint",
+        anchorTag: anchor.tagName
+      };
+    }
+    const paragraphs = Array.from(root.querySelectorAll("p")).filter(isVisiblyRendered);
+    if (paragraphs.length > 0) {
+      const anchor = paragraphs[Math.floor(paragraphs.length / 2)];
+      anchor.parentNode.insertBefore(wrapper, anchor.nextSibling);
+      return {
+        success: true,
+        strategy: "paragraph-midpoint",
+        anchorTag: anchor.tagName
+      };
+    }
+    return {
+      success: false,
+      reason: "insufficient-visible-anchors"
+    };
+  }
+
+  // If the initial placement fails, observe for DOM mutations and retry once content stabilizes.
+  function scheduleMiddleObserver(root, wrapper, creativeId) {
+    const observer = new MutationObserver(() => {
+      const result = tryInsertMiddle(root, wrapper);
+      if (result.success) {
+        globalState.metrics.middleViaObserver += 1;
+        logTelemetry("middle:repositioned", { id: creativeId, strategy: result.strategy });
+        stop();
+      }
+    });
+    const unregister = trackObserver(observer);
+    const stop = () => {
+      window.clearTimeout(timeoutId);
+      unregister();
+    };
+    observer.observe(root, { childList: true, subtree: true });
+    const timeoutId = window.setTimeout(() => {
+      stop();
+      logTelemetry("middle:observer-timeout", { id: creativeId });
+    }, CONFIG.maxObserverMs);
+  }
+
+  // Place the wrapper in the article flow, falling back gracefully and optionally observing for updates.
+  function injectMiddleAd(wrapper, creative) {
+    const root = findContentRoot();
+    const result = tryInsertMiddle(root, wrapper);
+    if (result.success) {
+      logTelemetry("middle:placed", Object.assign({ id: creative.id }, result));
+      return;
+    }
+    root.appendChild(wrapper);
+    logTelemetry("middle:fallback", { id: creative.id, reason: result.reason });
+    scheduleMiddleObserver(root, wrapper, creative.id);
+  }
+
+  // Attach a sticky ad to the viewport host while respecting dismiss overrides.
+  function injectStickyAd(wrapper, creative) {
+    if (globalState.flags.stickyDismissed) {
+      logTelemetry("sticky:skipped-dismissed", { id: creative.id });
+      wrapper.remove();
+      removeWrapperFromState(wrapper);
+      return;
+    }
+    const host = ensureStickyHost();
+    host.appendChild(wrapper);
+    logTelemetry("sticky:placed", { id: creative.id });
+  }
+
+  // Fetch creatives with a timeout shield so the UI never hangs indefinitely.
+  async function fetchCreatives() {
+    logTelemetry("fetch:start", { url: CONFIG.endpoint });
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), CONFIG.fetchTimeoutMs);
+    try {
+      const response = await fetch(CONFIG.endpoint, {
+        cache: "no-store",
+        mode: "cors",
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        throw new Error(`Request failed (${response.status})`);
+      }
+      const payload = await response.json();
+      if (!payload || !Array.isArray(payload.ads)) {
+        throw new Error("Malformed response from API.");
+      }
+      logTelemetry("fetch:success", { count: payload.ads.length });
+      return payload.ads;
+    } catch (error) {
+      if (error.name === "AbortError") {
+        throw new Error("Request timed out. Try again.");
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  // Normalize API payloads into a structure the injector understands.
+  function normalizeCreative(rawCreative, index) {
+    const html = decodeMarkup(rawCreative.markup);
+    const size = parseSize(rawCreative.size);
+    const type = (rawCreative.type || "middle").toLowerCase() === "sticky" ? "sticky" : "middle";
+    return {
+      html,
+      size,
+      type,
+      index,
+      id: `${CONFIG.wrapperPrefix}-${Date.now()}-${index}`
+    };
+  }
+
+  // High-level flow invoked when the user clicks the inject button.
+  async function handleInject() {
+    if (globalState.locks.injecting) {
+      return;
+    }
+    globalState.locks.injecting = true;
+    globalState.metrics.runs += 1;
+    setBusy(true);
+    setStatus("Fetching ads…", "info");
+    logTelemetry("inject:start", { run: globalState.metrics.runs });
+
+    try {
+      cleanupExistingAds();
+      const creatives = await fetchCreatives();
+      if (!creatives.length) {
+        setStatus("No ads returned from endpoint.", "error");
+        logTelemetry("inject:no-creatives");
+        return;
+      }
+
+      let injectedCount = 0;
+      creatives.forEach((creativeData, index) => {
+        try {
+          const creative = normalizeCreative(creativeData, index);
+          const wrapper = buildAdWrapper(creative);
+          if (creative.type === "sticky") {
+            injectStickyAd(wrapper, creative);
+          } else {
+            injectMiddleAd(wrapper, creative);
+          }
+          if (!globalState.flags.stickyDismissed || creative.type !== "sticky") {
+            injectedCount += 1;
+          }
+        } catch (error) {
+          logTelemetry("ad:error", { index, message: error.message });
+          console.error("Failed to inject ad", error);
+        }
+      });
+
+      globalState.metrics.lastInjectedCount = injectedCount;
+      if (injectedCount === 0) {
+        setStatus("Ads skipped due to prior sticky dismissal. Reset in More tools.", "info");
+      } else {
+        setStatus(`Injected ${injectedCount} ad${injectedCount === 1 ? "" : "s"}.`, "success");
+      }
+    } catch (error) {
+      setStatus(error.message || "Failed to fetch ads.", "error");
+      logTelemetry("inject:error", { message: error.message });
+    } finally {
+      globalState.locks.injecting = false;
+      setBusy(false);
+      renderDebugConsole();
+    }
+  }
+
+  // Initial entry point once the DOM is ready.
+  function init() {
+      console.log("Kargo Ad Injector loaded.");
+    injectBaseStyles();
+    ensureControlPanel();
+    const scriptTag = findOwnScriptTag();
+    globalState.scriptEl = scriptTag;
+    globalState.scriptSrc = computeScriptSrc();
+    globalState.autoInject = computeAutoInjectPreference(scriptTag);
+    setStatus(globalState.flags.stickyDismissed ? "Ready • sticky dismissed this session." : "Ready to inject Kargo ads.", "info");
+    logTelemetry("bootstrap", { scriptSrc: globalState.scriptSrc, autoInject: globalState.autoInject });
+    if (globalState.autoInject) {
+      setTimeout(() => {
+        logTelemetry("auto-inject:begin");
+        handleInject();
+      }, 350);
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init, { once: true });
+  } else {
+    init();
+  }
+})();

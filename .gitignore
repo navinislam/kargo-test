@@ -1,0 +1,7 @@
+.idea
+__pycache__/
+.venv
+IMPLEMENTATION_PLAN.md
+PLAN.md
+REFERENCE_PATTERNS.md
+kargo.js

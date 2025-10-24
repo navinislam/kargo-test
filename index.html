@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Kargo Ad Injection Tool</title>
+    <meta name="description" content="Mobile-friendly helper to fetch and inject Kargo interview ads into any page.">
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        background: #f7f7f7;
+        color: #1f1f1f;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 24px;
+      }
+      .demo-card {
+        max-width: 420px;
+        width: 100%;
+        background: #fff;
+        border-radius: 14px;
+        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+        padding: 24px;
+      }
+      .demo-card h1 {
+        margin: 0 0 12px;
+        font-size: 1.35rem;
+        line-height: 1.2;
+      }
+      .demo-card p {
+        margin: 0 0 16px;
+        line-height: 1.5;
+      }
+      .demo-card code {
+        font-size: 0.92rem;
+        background: rgba(15, 23, 42, 0.08);
+        border-radius: 6px;
+        padding: 2px 6px;
+      }
+      .demo-card footer {
+        font-size: 0.85rem;
+        color: #475569;
+      }
+    </style>
+  </head>
+  <body>
+    <article class="demo-card">
+      <h1>Ad Injection Tool</h1>
+      <p>
+        Load this page in a browser and the floating control panel will appear automatically. Use it to inject the
+        interview creatives right here, or open the <strong>More tools</strong> drawer to copy a console snippet /
+        bookmarklet that you can run on Distractify and Cookie &amp; Kate.
+      </p>
+      <p>
+        Prefer a plain embed? Drop the tag below into any HTML page and the same control panel boots up on load.
+      </p>
+      <p>
+        <code>&lt;script src="./script.js" data-auto-inject&gt;&lt;/script&gt;</code>
+        <br><small>(omit <code>data-auto-inject</code> if you prefer to trigger manually)</small>
+      </p>
+      <footer>
+        The UI and injection logic is mobile-first and works on Distractify and Cookie&amp;Kate URLs listed in the spec.
+      </footer>
+    </article>
+    <script src="./script.js" defer data-auto-inject></script>
+  </body>
+</html>
