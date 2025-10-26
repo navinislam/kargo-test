@@ -23,8 +23,28 @@ function buildConsoleSnippet(source) {
 }
 
 function buildBookmarklet(snippet) {
-  // encodeURIComponent ensures special characters survive inside the URI.
-  return `javascript:${encodeURIComponent(snippet).replace(/%20/g, "+")}`;
+  // The inline bookmarklet (70KB+) exceeds browser limits and gets blocked by security policies.
+  // Instead, create a tiny remote loader that fetches script.js from GitHub raw or CDN.
+
+  // Option 1: GitHub raw URL (replace with actual repo URL)
+  const remoteLoader = `javascript:(function(){var s=document.createElement('script');s.src='https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/script.js';s.onerror=function(){alert('Failed to load Kargo injector. Check the URL in build-snippets.js')};document.body.appendChild(s);})()`;
+
+  // Option 2: If you don't have GitHub Pages, document the console snippet as primary method
+  const fallbackMessage = `
+BOOKMARKLET SIZE ISSUE:
+The generated bookmarklet is ${snippet.length} characters (${Math.round(snippet.length/1024)}KB).
+Browsers limit bookmarklets to ~2KB and block javascript: URLs when pasted in the address bar.
+
+SOLUTION OPTIONS:
+1. Use the console snippet (dist/console-snippet.js) - works reliably
+2. Host script.js on GitHub Pages/CDN and update the remote loader below
+3. Use index.html for local testing
+
+REMOTE LOADER BOOKMARKLET (update YOUR_USERNAME/YOUR_REPO):
+${remoteLoader}
+`.trim();
+
+  return fallbackMessage;
 }
 
 function writeArtifacts(snippet, bookmarklet) {

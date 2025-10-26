@@ -1,11 +1,9 @@
 {
-  "name": "Kargo",
+  "name": "kargo-ad-injection-tool",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Mobile-first ad injection tool for Kargo interview assignment",
   "scripts": {
-    "build:snippets": "node scripts/build-snippets.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build:snippets": "node scripts/build-snippets.js"
   },
   "private": true
 }

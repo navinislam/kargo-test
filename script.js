@@ -1,6 +1,364 @@
 (() => {
+  const globalScope = typeof globalThis !== "undefined" ? globalThis : (typeof window !== "undefined" ? window : undefined);
+  if (!globalScope) {
+    return;
+  }
+  const namespace = globalScope.__kargoModules || (globalScope.__kargoModules = {});
+
+  if (!namespace.StickyAdManager) {
+    const DEFAULT_OPTIONS = {
+      position: "bottom",
+      zIndex: 9999,
+      closeButtonPosition: "top-right",
+      injectStyles: true,
+      containerClassName: "kargo-sticky-container",
+      closeButtonClassName: "kargo-close-btn",
+      iframeClassName: "kargo-ad-iframe",
+      ariaLabel: "Sticky advertisement",
+      onInject: null,
+      onClose: null,
+      onRemove: null
+    };
+    const DEFAULT_SIZE = { width: 320, height: 50 };
+    const STYLE_TAG_ID = "kargo-sticky-ad-styles";
+
+    const parseSize = (size) => {
+      if (typeof size !== "string") {
+        return { ...DEFAULT_SIZE };
+      }
+      const [widthPart, heightPart] = size.toLowerCase().split("x");
+      const width = Number.parseInt(widthPart, 10);
+      const height = Number.parseInt(heightPart, 10);
+      if (!Number.isFinite(width) || !Number.isFinite(height)) {
+        return { ...DEFAULT_SIZE };
+      }
+      return { width, height };
+    };
+
+    const px = (value) => `${value}px`;
+
+    class StickyAdManager {
+      constructor(options = {}) {
+        this.options = { ...DEFAULT_OPTIONS, ...options };
+        this.currentSticky = null;
+        this.currentAdId = null;
+
+        this.inject = this.inject.bind(this);
+        this.remove = this.remove.bind(this);
+      }
+
+      inject(ad) {
+        if (typeof document === "undefined") {
+          return;
+        }
+        if (!ad || typeof ad !== "object") {
+          console.warn("[StickyAdManager] Ignoring invalid ad payload:", ad);
+          return;
+        }
+
+        this.ensureStyles();
+        this.remove();
+
+        const container = this.createContainer(ad);
+        const closeButton = this.createCloseButton();
+        const adContent = this.createAdContent(ad);
+
+        container.appendChild(closeButton);
+        container.appendChild(adContent);
+
+        document.body.appendChild(container);
+        this.currentSticky = container;
+        this.currentAdId = container.dataset.adId;
+        if (typeof this.options.onInject === "function") {
+          try {
+            this.options.onInject(container, ad);
+          } catch (error) {
+            console.warn("[StickyAdManager] onInject callback threw", error);
+          }
+        }
+
+        console.log("[StickyAdManager] Sticky ad injected");
+      }
+
+      remove() {
+        const activeNode = this.currentSticky;
+        const activeId = this.currentAdId;
+        if (activeNode && activeNode.parentNode) {
+          activeNode.parentNode.removeChild(activeNode);
+        }
+        if (activeNode) {
+          console.log("[StickyAdManager] Sticky ad removed");
+          if (typeof this.options.onRemove === "function") {
+            try {
+              this.options.onRemove(activeNode, activeId);
+            } catch (error) {
+              console.warn("[StickyAdManager] onRemove callback threw", error);
+            }
+          }
+        }
+        this.currentSticky = null;
+        this.currentAdId = null;
+      }
+
+      hasActiveSticky() {
+        return Boolean(this.currentSticky);
+      }
+
+      getActiveSticky() {
+        return this.currentSticky;
+      }
+
+      ensureStyles() {
+        if (!this.options.injectStyles || typeof document === "undefined") {
+          return;
+        }
+        if (document.getElementById(STYLE_TAG_ID)) {
+          return;
+        }
+        const style = document.createElement("style");
+        style.id = STYLE_TAG_ID;
+        style.textContent = `
+          .${this.options.containerClassName} {
+            position: fixed;
+            left: 50%;
+            transform: translateX(-50%);
+            bottom: calc(env(safe-area-inset-bottom, 0px));
+            z-index: ${this.options.zIndex};
+            background: #ffffff;
+            box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.16);
+            border-radius: 18px 18px 0 0;
+            padding: 12px 16px 16px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            max-width: 100vw;
+            box-sizing: border-box;
+            animation: kargo-sticky-slide-up 0.32s ease-out;
+          }
+
+          .${this.options.containerClassName} iframe {
+            border: none;
+          }
+
+          .${this.options.closeButtonClassName} {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            background: rgba(15, 23, 42, 0.7);
+            color: #ffffff;
+            border: none;
+            border-radius: 999px;
+            width: 28px;
+            height: 28px;
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+            z-index: ${this.options.zIndex + 1};
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s ease, transform 0.2s ease;
+          }
+
+          .${this.options.closeButtonClassName}:hover,
+          .${this.options.closeButtonClassName}:focus {
+            background: rgba(15, 23, 42, 0.85);
+            transform: scale(1.05);
+            outline: none;
+          }
+
+          @keyframes kargo-sticky-slide-up {
+            from {
+              transform: translateX(-50%) translateY(100%);
+              opacity: 0;
+            }
+            to {
+              transform: translateX(-50%) translateY(0);
+              opacity: 1;
+            }
+          }
+
+          @media (max-width: 767px) {
+            .${this.options.containerClassName} {
+              left: 0;
+              right: 0;
+              transform: none;
+              width: 100%;
+              border-radius: 0;
+            }
+          }
+        `;
+        document.head.appendChild(style);
+      }
+
+      createContainer(ad) {
+        const container = document.createElement("div");
+        container.className = this.options.containerClassName;
+        container.dataset.adType = "sticky";
+        container.dataset.adId = this.generateAdId();
+        container.setAttribute("role", "region");
+        container.setAttribute("aria-label", this.options.ariaLabel);
+        container.style.position = "fixed";
+        container.style.zIndex = String(this.options.zIndex);
+        const normalizedPosition = (this.options.position || "bottom").toLowerCase();
+        const isTop = normalizedPosition === "top";
+        const isBottom = normalizedPosition === "bottom";
+        if (isTop || isBottom) {
+          container.style.left = "50%";
+          container.style.transform = "translateX(-50%)";
+        }
+        if (isTop) {
+          container.style.top = "0";
+          container.style.bottom = "auto";
+        } else {
+          container.style.top = "auto";
+          container.style.bottom = "";
+        }
+        if (ad?.id) {
+          container.dataset.creativeKey = ad.id;
+        }
+        return container;
+      }
+
+      createCloseButton() {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = this.options.closeButtonClassName;
+        button.setAttribute("aria-label", "Close advertisement");
+        button.textContent = "×";
+        const position = (this.options.closeButtonPosition || "top-right").toLowerCase();
+        const posTop = position.includes("top");
+        const posBottom = position.includes("bottom");
+        const posLeft = position.includes("left");
+        const posRight = position.includes("right");
+        button.style.top = posTop ? "6px" : "auto";
+        button.style.bottom = posBottom ? "6px" : "auto";
+        button.style.left = posLeft ? "6px" : "auto";
+        button.style.right = posRight ? "6px" : "auto";
+        button.addEventListener("click", () => {
+          const activeId = this.currentAdId;
+          this.remove();
+          if (typeof this.options.onClose === "function") {
+            try {
+              this.options.onClose(activeId);
+            } catch (error) {
+              console.warn("[StickyAdManager] onClose callback threw", error);
+            }
+          }
+        });
+        return button;
+      }
+
+      createAdContent(ad) {
+        const iframe = document.createElement("iframe");
+        iframe.className = this.options.iframeClassName;
+        const { width, height } = parseSize(ad.size);
+        iframe.width = width;
+        iframe.height = height;
+        iframe.style.width = px(width);
+        iframe.style.height = px(height);
+        iframe.style.border = "none";
+        iframe.title = "Advertisement";
+        iframe.sandbox = "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox";
+        iframe.srcdoc = decodeMarkup(ad.markup);
+        return iframe;
+      }
+
+      generateAdId() {
+        return `sticky-ad-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      }
+    }
+
+    namespace.StickyAdManager = StickyAdManager;
+  }
+
+  if (!namespace.AdInjector) {
+    const StickyAdManager = namespace.StickyAdManager;
+
+    class AdInjector {
+      constructor(options = {}) {
+        const {
+          sticky: stickyOptions = {},
+          middleInjector = null,
+          hooks = {}
+        } = options;
+        this.stickyManager = new StickyAdManager(stickyOptions);
+        this.middleInjector = typeof middleInjector === "function" ? middleInjector : null;
+        this.hooks = {
+          willInject: typeof hooks.onStickyWillInject === "function" ? hooks.onStickyWillInject : null,
+          injected: typeof hooks.onStickyInjected === "function" ? hooks.onStickyInjected : null,
+          removed: typeof hooks.onStickyRemoved === "function" ? hooks.onStickyRemoved : null
+        };
+      }
+
+      injectAds(ads = []) {
+        if (!Array.isArray(ads)) {
+          console.warn("[AdInjector] Expected an array of ads.");
+          return 0;
+        }
+
+        let injected = 0;
+
+        ads.forEach((ad) => {
+          if (!ad || typeof ad !== "object") {
+            console.warn("[AdInjector] Skipping invalid ad payload:", ad);
+            return;
+          }
+
+          const type = (ad.type || "").toLowerCase();
+          if (type === "sticky") {
+            const shouldInject = this.hooks.willInject ? this.hooks.willInject(ad, this.stickyManager) !== false : true;
+            if (shouldInject) {
+              this.stickyManager.inject(ad);
+              if (this.hooks.injected) {
+                try {
+                  this.hooks.injected(ad, this.stickyManager);
+                } catch (error) {
+                  console.warn("[AdInjector] onStickyInjected hook threw", error);
+                }
+              }
+              injected += 1;
+            }
+            return;
+          }
+
+          if (this.middleInjector) {
+            this.middleInjector(ad);
+            injected += 1;
+          } else {
+            console.info("[AdInjector] No middle injector configured, skipping non-sticky ad.", ad);
+          }
+        });
+
+        return injected;
+      }
+
+      removeSticky() {
+        const activeNode = this.stickyManager.getActiveSticky();
+        const activeId = activeNode?.dataset?.adId || null;
+        if (activeNode) {
+          this.stickyManager.remove();
+          if (this.hooks.removed) {
+            try {
+              this.hooks.removed(activeId, this.stickyManager);
+            } catch (error) {
+              console.warn("[AdInjector] onStickyRemoved hook threw", error);
+            }
+          }
+          return true;
+        }
+        this.stickyManager.remove();
+        return false;
+      }
+    }
+
+    namespace.AdInjector = AdInjector;
+  }
+
   // Keep everything namespaced under a predictable global for idempotent reloads.
   const GLOBAL_NS = "__kargoInterviewAds";
+  const MODULES = namespace;
 
   // Centralized configuration so interviewers can see integration details at a glance.
   const CONFIG = {
@@ -55,7 +413,6 @@
     initialized: true,
     wrappers: [],
     observers: [],
-    stickyHost: null,
     log: [],
     metrics: {
       runs: 0,
@@ -70,6 +427,10 @@
       injecting: false
     },
     listeners: {},
+    managers: existingNamespace.managers || {
+      adInjector: null,
+      activeStickyId: null
+    },
     ui: {},
     scriptEl: null,
     scriptSrc: null,
@@ -194,6 +555,8 @@
         left: 50%;
         bottom: calc(18px + env(safe-area-inset-bottom, 0px));
         transform: translateX(-50%);
+        top: auto;
+        right: auto;
         z-index: 2147483600;
         display: grid;
         gap: 12px;
@@ -206,6 +569,12 @@
         font-size: 15px;
         box-shadow: 0 25px 60px rgba(15, 23, 42, 0.35);
         width: min(92vw, 360px);
+        touch-action: manipulation;
+        cursor: grab;
+      }
+
+      #${CONFIG.toolId}[data-dragging="true"] {
+        cursor: grabbing;
       }
 
       #${CONFIG.toolId} button,
@@ -287,6 +656,21 @@
       #${CONFIG.toolId} .kargo-tool__actions {
         display: grid;
         gap: 8px;
+      }
+
+      #${CONFIG.toolId} .kargo-tool__drag {
+        width: 100%;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.35);
+        cursor: inherit;
+        touch-action: none;
+      }
+
+      #${CONFIG.toolId} .kargo-tool__drag::after {
+        content: "";
+        display: block;
+        height: 10px;
       }
 
       #${CONFIG.toolId} .kargo-tool__muted {
@@ -410,25 +794,6 @@
         width: 100%;
       }
 
-      .${CONFIG.wrapperPrefix} .kargo-interview-ad__close {
-        position: absolute;
-        top: 6px;
-        right: 6px;
-        border: none;
-        border-radius: 999px;
-        width: 30px;
-        height: 30px;
-        background: rgba(15, 23, 42, 0.9);
-        color: #fff;
-        cursor: pointer;
-        font-size: 16px;
-        line-height: 1;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2);
-      }
-
       .${CONFIG.wrapperPrefix} iframe,
       .${CONFIG.wrapperPrefix} img,
       .${CONFIG.wrapperPrefix} video {
@@ -502,6 +867,7 @@
         return `<option value="${site.url}">${site.label}</option>`;
       }).join("");
       panel.innerHTML = `
+        <div class="kargo-tool__drag" data-role="drag-handle" aria-hidden="true"></div>
         <button type="button" class="kargo-tool__inject" data-role="inject">Inject Ads</button>
         <div class="kargo-tool__status" data-role="status" role="status" aria-live="polite">Bootstrapping…</div>
         <button type="button" class="kargo-tool__more kargo-tool__secondary" data-role="more" aria-expanded="false">More tools</button>
@@ -529,6 +895,7 @@
 
     const ui = {
       panel,
+      dragHandle: panel.querySelector('[data-role="drag-handle"]'),
       status: panel.querySelector('[data-role="status"]'),
       inject: panel.querySelector('[data-role="inject"]'),
       more: panel.querySelector('[data-role="more"]'),
@@ -543,6 +910,7 @@
 
     globalState.ui = ui;
     bindControlEvents();
+    makePanelDraggable(panel, ui.dragHandle || panel);
     return panel;
   }
 
@@ -551,7 +919,25 @@
     const { inject, more, drawer, preview, snippet, bookmarklet, debugToggle, resetSticky } = globalState.ui;
     if (!inject.dataset.listenerAttached) {
       inject.dataset.listenerAttached = "true";
-      inject.addEventListener("click", handleInject);
+      inject.addEventListener("pointerdown", (event) => {
+        try {
+          inject.setPointerCapture(event.pointerId);
+        } catch (error) {
+          // Ignore pointer capture failures (e.g., unsupported browsers).
+        }
+      });
+      const releasePointer = (event) => {
+        if (typeof inject.hasPointerCapture === "function" && inject.hasPointerCapture(event.pointerId)) {
+          inject.releasePointerCapture(event.pointerId);
+        }
+      };
+      inject.addEventListener("pointerup", releasePointer);
+      inject.addEventListener("pointercancel", releasePointer);
+      inject.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        handleInject();
+      });
     }
     if (!more.dataset.listenerAttached) {
       more.dataset.listenerAttached = "true";
@@ -611,6 +997,111 @@
         logTelemetry("ui:sticky-dismissal-reset");
       });
     }
+  }
+
+  // Allow the floating control panel to be repositioned via pointer/touch dragging.
+  function makePanelDraggable(panel, handle) {
+    if (!panel || !handle) {
+      return;
+    }
+    if (handle.dataset.dragListenerAttached === "true") {
+      return;
+    }
+
+    const margin = 12;
+    let activePointerId = null;
+    let startPoint = { x: 0, y: 0 };
+    let startRect = null;
+
+    const clampPosition = (left, top, rect) => {
+      const bounds = rect || panel.getBoundingClientRect();
+      const maxLeft = Math.max(margin, window.innerWidth - bounds.width - margin);
+      const maxTop = Math.max(margin, window.innerHeight - bounds.height - margin);
+      return {
+        left: Math.min(Math.max(left, margin), maxLeft),
+        top: Math.min(Math.max(top, margin), maxTop)
+      };
+    };
+
+    const applyPosition = (left, top) => {
+      panel.style.left = `${left}px`;
+      panel.style.top = `${top}px`;
+      panel.style.right = "auto";
+      panel.style.bottom = "auto";
+      panel.style.transform = "translate(0, 0)";
+      panel.dataset.customPosition = "true";
+    };
+
+    const clampToViewport = () => {
+      if (panel.dataset.customPosition === "true") {
+        const rect = panel.getBoundingClientRect();
+        const { left, top } = clampPosition(rect.left, rect.top, rect);
+        applyPosition(left, top);
+      }
+    };
+
+    const stopDragging = () => {
+      if (activePointerId === null) {
+        return;
+      }
+      try {
+        handle.releasePointerCapture(activePointerId);
+      } catch (error) {
+        // ignore if pointer capture already released
+      }
+      activePointerId = null;
+      panel.removeAttribute("data-dragging");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerRelease);
+      window.removeEventListener("pointercancel", handlePointerRelease);
+      clampToViewport();
+    };
+
+    const handlePointerMove = (event) => {
+      if (event.pointerId !== activePointerId) {
+        return;
+      }
+      const deltaX = event.clientX - startPoint.x;
+      const deltaY = event.clientY - startPoint.y;
+      const targetLeft = startRect.left + deltaX;
+      const targetTop = startRect.top + deltaY;
+      const { left, top } = clampPosition(targetLeft, targetTop, startRect);
+      applyPosition(left, top);
+    };
+
+    const handlePointerRelease = (event) => {
+      if (event.pointerId === activePointerId) {
+        stopDragging();
+      }
+    };
+
+    const handlePointerDown = (event) => {
+      if (activePointerId !== null) {
+        return;
+      }
+      activePointerId = event.pointerId;
+      startPoint = { x: event.clientX, y: event.clientY };
+      startRect = panel.getBoundingClientRect();
+      panel.dataset.dragging = "true";
+      try {
+        handle.setPointerCapture(activePointerId);
+      } catch (error) {
+        // ignore pointer capture errors for unsupported browsers
+      }
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerRelease);
+      window.addEventListener("pointercancel", handlePointerRelease);
+      event.preventDefault();
+    };
+
+    handle.addEventListener("pointerdown", handlePointerDown);
+
+    if (!panel.dataset.resizeListenerAttached) {
+      panel.dataset.resizeListenerAttached = "true";
+      window.addEventListener("resize", clampToViewport);
+    }
+
+    handle.dataset.dragListenerAttached = "true";
   }
 
   // Helper: update the primary status line with semantic color coding.
@@ -741,22 +1232,51 @@
     if (typeof markup !== "string") {
       throw new Error("Invalid markup payload.");
     }
+    const trimmed = markup.trim();
+    if (trimmed === "") {
+      return "";
+    }
+    if (/<[a-z][^>]*>/i.test(trimmed)) {
+      return markup;
+    }
+    const sanitized = trimmed.replace(/\s+/g, "");
+    const maybeBase64 = sanitized.length % 4 === 0 || sanitized.length % 4 === 2 || sanitized.length % 4 === 3;
+    const base64Pattern = /^[A-Za-z0-9+/=_-]+$/;
+    if (!maybeBase64 || !base64Pattern.test(sanitized)) {
+      return markup;
+    }
+    const normalized = sanitized
+      .replace(/-/g, "+")
+      .replace(/_/g, "/");
+    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+    if (!maybeBase64) {
+      return markup;
+    }
     try {
-      return atob(markup);
-    } catch (firstError) {
-      try {
-        const binary = window.atob(markup);
+      const base64Decoder = typeof (globalScope?.atob) === "function"
+        ? globalScope.atob.bind(globalScope)
+        : (typeof atob === "function" ? atob : null);
+      if (!base64Decoder && typeof Buffer === "undefined") {
+        return markup;
+      }
+      if (!base64Decoder && typeof Buffer !== "undefined") {
+        return Buffer.from(padded, "base64").toString("utf-8");
+      }
+      const binary = base64Decoder ? base64Decoder(padded) : "";
+      const TextDecoderCtor = typeof (globalScope?.TextDecoder) === "function"
+        ? globalScope.TextDecoder
+        : (typeof TextDecoder === "function" ? TextDecoder : null);
+      if (TextDecoderCtor && binary) {
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i += 1) {
           bytes[i] = binary.charCodeAt(i);
         }
-        if (window.TextDecoder) {
-          return new TextDecoder("utf-8").decode(bytes);
-        }
-        return binary;
-      } catch (error) {
-        throw new Error("Failed to decode markup");
+        return new TextDecoderCtor("utf-8").decode(bytes);
       }
+      return binary || markup;
+    } catch (error) {
+      console.warn("[KargoInjector] Failed to base64 decode markup, using raw payload.", error);
+      return markup;
     }
   }
 
@@ -774,6 +1294,53 @@
     return { width: 320, height: 50 };
   }
 
+  function configureAdInjector() {
+    if (globalState.managers.adInjector) {
+      return globalState.managers.adInjector;
+    }
+    const stickyOptions = {
+      zIndex: 2147483600,
+      injectStyles: true,
+      onInject: (container, ad) => {
+        container.dataset.kargoPlacement = "sticky";
+        if (ad?.id) {
+          container.dataset.creativeKey = ad.id;
+        }
+      },
+      onClose: (adId) => {
+        rememberStickyDismissal(true);
+        setStatus("Sticky ad closed.", "info");
+        logTelemetry("sticky:dismissed", adId ? { id: adId } : {});
+      },
+      onRemove: () => {
+        globalState.managers.activeStickyId = null;
+      }
+    };
+    const hooks = {
+      onStickyWillInject: (ad) => {
+        if (globalState.flags.stickyDismissed) {
+          logTelemetry("sticky:skipped-dismissed", { id: ad.id });
+          return false;
+        }
+        return true;
+      },
+      onStickyInjected: (ad) => {
+        globalState.managers.activeStickyId = ad.id;
+        logTelemetry("sticky:placed", { id: ad.id });
+      },
+      onStickyRemoved: () => {
+        globalState.managers.activeStickyId = null;
+      }
+    };
+    const adInjector = new MODULES.AdInjector({
+      sticky: stickyOptions,
+      hooks
+    });
+    globalState.managers.adInjector = adInjector;
+    ensureEscapeListener();
+    return adInjector;
+  }
+
   // Reset prior ad placements, host containers, and observers before a fresh run.
   function cleanupExistingAds() {
     globalState.wrappers.forEach((node) => {
@@ -784,25 +1351,10 @@
     globalState.wrappers = [];
     globalState.observers.forEach((observer) => observer.disconnect());
     globalState.observers = [];
-    if (globalState.stickyHost?.parentNode) {
-      globalState.stickyHost.parentNode.removeChild(globalState.stickyHost);
+    if (globalState.managers.adInjector) {
+      globalState.managers.adInjector.removeSticky();
+      globalState.managers.activeStickyId = null;
     }
-    globalState.stickyHost = null;
-  }
-
-  // Ensure we have a single sticky host container anchored to the viewport bottom.
-  function ensureStickyHost() {
-    if (globalState.stickyHost && document.body.contains(globalState.stickyHost)) {
-      return globalState.stickyHost;
-    }
-    const host = document.createElement("div");
-    host.className = CONFIG.stickyHostClass;
-    host.setAttribute("role", "complementary");
-    host.setAttribute("aria-label", "Injected sticky advertisements");
-    document.body.appendChild(host);
-    globalState.stickyHost = host;
-    ensureEscapeListener();
-    return host;
   }
 
   // Listen for Escape so reviewers can quickly dismiss sticky ads without a mouse.
@@ -811,23 +1363,19 @@
       return;
     }
     const handler = (event) => {
-      if (event.key === "Escape" && globalState.stickyHost?.childElementCount) {
-        logTelemetry("sticky:dismissed-escape");
-        rememberStickyDismissal(true);
-        cleanupStickyHost();
-        setStatus("Sticky ad dismissed.", "info");
+      if (event.key === "Escape") {
+        const injector = globalState.managers.adInjector;
+        const hasSticky = injector?.stickyManager?.hasActiveSticky?.() || false;
+        if (hasSticky) {
+          logTelemetry("sticky:dismissed-escape");
+          rememberStickyDismissal(true);
+          injector.removeSticky();
+          setStatus("Sticky ad dismissed.", "info");
+        }
       }
     };
     document.addEventListener("keydown", handler);
     globalState.listeners.keydown = handler;
-  }
-
-  // Remove the sticky host and clean references when no sticky ads remain.
-  function cleanupStickyHost() {
-    if (globalState.stickyHost?.parentNode) {
-      globalState.stickyHost.parentNode.removeChild(globalState.stickyHost);
-    }
-    globalState.stickyHost = null;
   }
 
   // Track dismissal preference in sessionStorage so refreshes respect the choice.
@@ -843,7 +1391,8 @@
   }
 
   // Create a DOM wrapper for a creative with sizing and optional close controls.
-  function buildAdWrapper({ html, size, type, id }) {
+  function buildAdWrapper(creative) {
+    const { decodedMarkup, size, type, id } = creative;
     const wrapper = document.createElement("div");
     wrapper.className = CONFIG.wrapperPrefix;
     wrapper.dataset.placement = type;
@@ -856,41 +1405,21 @@
     frame.style.width = px(size.width);
     frame.style.height = px(size.height);
 
-    const inner = document.createElement("div");
-    inner.className = "kargo-interview-ad__wrapper";
-    inner.innerHTML = html;
-    frame.appendChild(inner);
+    const iframe = document.createElement("iframe");
+    iframe.className = "kargo-interview-ad__iframe";
+    iframe.sandbox = "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox";
+    iframe.srcdoc = decodedMarkup;
+    iframe.style.width = px(size.width);
+    iframe.style.height = px(size.height);
+    iframe.style.border = "none";
+    iframe.title = "Advertisement";
+    frame.appendChild(iframe);
     wrapper.appendChild(frame);
 
-    if (type === "sticky") {
-      const close = document.createElement("button");
-      close.type = "button";
-      close.className = "kargo-interview-ad__close";
-      close.setAttribute("aria-label", "Close ad");
-      close.textContent = "×";
-      close.addEventListener("click", () => {
-        rememberStickyDismissal(true);
-        removeWrapperFromState(wrapper);
-        wrapper.remove();
-        if (!globalState.stickyHost?.hasChildNodes()) {
-          cleanupStickyHost();
-        }
-        setStatus("Sticky ad closed.", "info");
-        logTelemetry("sticky:dismissed", { id });
-      });
-      wrapper.appendChild(close);
+    if (type !== "sticky") {
+      globalState.wrappers.push(wrapper);
     }
-
-    globalState.wrappers.push(wrapper);
     return wrapper;
-  }
-
-  // Remove a wrapper from the global cache so repeat runs do not reference dead nodes.
-  function removeWrapperFromState(wrapper) {
-    const index = globalState.wrappers.indexOf(wrapper);
-    if (index >= 0) {
-      globalState.wrappers.splice(index, 1);
-    }
   }
 
   // Pick the most article-like container on the page using heuristics.
@@ -976,19 +1505,6 @@
     scheduleMiddleObserver(root, wrapper, creative.id);
   }
 
-  // Attach a sticky ad to the viewport host while respecting dismiss overrides.
-  function injectStickyAd(wrapper, creative) {
-    if (globalState.flags.stickyDismissed) {
-      logTelemetry("sticky:skipped-dismissed", { id: creative.id });
-      wrapper.remove();
-      removeWrapperFromState(wrapper);
-      return;
-    }
-    const host = ensureStickyHost();
-    host.appendChild(wrapper);
-    logTelemetry("sticky:placed", { id: creative.id });
-  }
-
   // Fetch creatives with a timeout shield so the UI never hangs indefinitely.
   async function fetchCreatives() {
     logTelemetry("fetch:start", { url: CONFIG.endpoint });
@@ -1021,14 +1537,19 @@
 
   // Normalize API payloads into a structure the injector understands.
   function normalizeCreative(rawCreative, index) {
-    const html = decodeMarkup(rawCreative.markup);
-    const size = parseSize(rawCreative.size);
     const type = (rawCreative.type || "middle").toLowerCase() === "sticky" ? "sticky" : "middle";
+    const size = parseSize(rawCreative.size);
+    const markup = rawCreative.markup;
+    const decodedMarkup = decodeMarkup(markup);
+    const sizeLabel = typeof rawCreative.size === "string" && rawCreative.size ? rawCreative.size : `${size.width}x${size.height}`;
     return {
-      html,
+      markup,
+      decodedMarkup,
       size,
+      sizeLabel,
       type,
       index,
+      sourceId: rawCreative.id || null,
       id: `${CONFIG.wrapperPrefix}-${Date.now()}-${index}`
     };
   }
@@ -1046,6 +1567,7 @@
 
     try {
       cleanupExistingAds();
+      const adInjector = configureAdInjector();
       const creatives = await fetchCreatives();
       if (!creatives.length) {
         setStatus("No ads returned from endpoint.", "error");
@@ -1057,13 +1579,19 @@
       creatives.forEach((creativeData, index) => {
         try {
           const creative = normalizeCreative(creativeData, index);
-          const wrapper = buildAdWrapper(creative);
           if (creative.type === "sticky") {
-            injectStickyAd(wrapper, creative);
+            const result = adInjector.injectAds([
+              {
+                id: creative.id,
+                type: creative.type,
+                markup: creative.markup,
+                size: creative.sizeLabel
+              }
+            ]);
+            injectedCount += result;
           } else {
+            const wrapper = buildAdWrapper(creative);
             injectMiddleAd(wrapper, creative);
-          }
-          if (!globalState.flags.stickyDismissed || creative.type !== "sticky") {
             injectedCount += 1;
           }
         } catch (error) {
