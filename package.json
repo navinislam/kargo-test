@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "description": "Mobile-first ad injection tool for Kargo interview assignment",
   "scripts": {
-    "build:snippets": "node scripts/build-snippets.js"
+    "build:snippets": "node scripts/build-snippets.js",
+    "build:extension": "node scripts/build-extension.js"
   },
   "private": true
 }
