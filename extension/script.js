@@ -1084,40 +1084,40 @@
     return document.body;
   }
 
-  // Collect visible block-level children as candidates for mid-article insertion.
-  function collectCandidateBlocks(root) {
-    return Array.from(root.children).filter((child) => {
-      if (!child.tagName) return false;
-      if (!isVisiblyRendered(child)) return false;
-      return /^(ARTICLE|DIV|P|SECTION|H2|H3|LI)$/i.test(child.tagName);
-    });
-  }
-
-  // Try to position the wrapper after a midpoint node and return placement metadata.
+  // Try to position the wrapper after a midpoint paragraph and return placement metadata.
+  // Simplified approach: Use semantic <p> tags exclusively, serve on all page lengths.
   function tryInsertMiddle(root, wrapper) {
-    const blocks = collectCandidateBlocks(root);
-    if (blocks.length >= 3) {
-      const anchor = blocks[Math.floor(blocks.length / 2)];
-      anchor.parentNode.insertBefore(wrapper, anchor.nextSibling);
+    // Find all visible paragraphs at any depth (not just direct children)
+    const allParagraphs = Array.from(root.querySelectorAll('p'));
+    const visibleParagraphs = allParagraphs.filter(p => {
+      if (!isVisiblyRendered(p)) return false;
+      // Additional check: paragraph should have some text content
+      return p.textContent.trim().length > 0;
+    });
+
+    if (visibleParagraphs.length === 0) {
+      // Fallback: No paragraphs found, insert at end of container
+      // This ensures we ALWAYS serve, even on non-article pages
+      root.appendChild(wrapper);
       return {
         success: true,
-        strategy: "visible-block-midpoint",
-        anchorTag: anchor.tagName
+        strategy: "end-of-container",
+        reason: "no-paragraphs-found",
+        totalParagraphs: 0
       };
     }
-    const paragraphs = Array.from(root.querySelectorAll("p")).filter(isVisiblyRendered);
-    if (paragraphs.length > 0) {
-      const anchor = paragraphs[Math.floor(paragraphs.length / 2)];
-      anchor.parentNode.insertBefore(wrapper, anchor.nextSibling);
-      return {
-        success: true,
-        strategy: "paragraph-midpoint",
-        anchorTag: anchor.tagName
-      };
-    }
+
+    // Insert after midpoint paragraph (works for 1, 2, 3+ paragraphs)
+    const midIndex = Math.floor(visibleParagraphs.length / 2);
+    const anchor = visibleParagraphs[midIndex];
+    anchor.parentNode.insertBefore(wrapper, anchor.nextSibling);
+
     return {
-      success: false,
-      reason: "insufficient-visible-anchors"
+      success: true,
+      strategy: "paragraph-midpoint",
+      anchorTag: anchor.tagName,
+      totalParagraphs: visibleParagraphs.length,
+      insertedAfterIndex: midIndex
     };
   }
 

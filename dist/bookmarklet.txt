@@ -1,5 +1,5 @@
 BOOKMARKLET SIZE ISSUE:
-The generated bookmarklet is 57435 characters (56KB).
+The generated bookmarklet is 43865 characters (43KB).
 Browsers limit bookmarklets to ~2KB and block javascript: URLs when pasted in the address bar.
 
 SOLUTION OPTIONS:
