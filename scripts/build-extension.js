@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Copies the canonical `script.js` bundle into the extension directory so it
- * can be exposed as a web accessible resource.
+ * Copies the canonical `script.js` bundle into the extension
+ * directory so it can be exposed as a web accessible resource.
  */
 const fs = require("fs");
 const path = require("path");

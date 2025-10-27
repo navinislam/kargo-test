@@ -41,48 +41,62 @@
     width: 100%;
     height: 100%;
     display: grid;
-    grid-template-columns: 92px 1fr 110px;
-    background: #0f172a;
-    color: #f8fafc;
-    font-family: "Helvetica Neue", Arial, sans-serif;
+    grid-template-columns: 96px 1fr 128px;
+    background: linear-gradient(120deg, #020617, #0f172a 55%, #1e293b 100%);
+    color: #f1f5f9;
+    font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
     overflow: hidden;
+    position: relative;
   }
   .kargo-fallback-sticky__brand {
-    background: #1f2937;
+    background: rgba(15, 23, 42, 0.85);
     display: flex;
     align-items: center;
     justify-content: center;
     flex-direction: column;
     text-transform: uppercase;
-    letter-spacing: 1.2px;
+    letter-spacing: 1.4px;
     font-weight: 700;
-    font-size: 13px;
-    padding: 8px 6px;
-  }
-  .kargo-fallback-sticky__brand span {
     font-size: 12px;
-    letter-spacing: 2px;
+    padding: 10px 8px;
+    border-right: 1px solid rgba(148, 163, 184, 0.25);
+  }
+  .kargo-fallback-sticky__brand strong {
+    font-size: 15px;
+    letter-spacing: 2.6px;
   }
   .kargo-fallback-sticky__image {
-    background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.15), transparent 60%), radial-gradient(circle at 70% 50%, rgba(251,191,36,0.4), rgba(15,23,42,0.6) 68%);
+    position: relative;
+    background: radial-gradient(circle at 20% 20%, rgba(14, 165, 233, 0.45), transparent 55%), radial-gradient(circle at 80% 40%, rgba(167, 139, 250, 0.45), transparent 65%), rgba(15, 23, 42, 0.8);
     display: flex;
-    align-items: flex-end;
-    justify-content: flex-start;
-    padding: 12px;
-    box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.25);
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: 14px 16px;
   }
   .kargo-fallback-sticky__image::before {
-    content: "Chef\\'s Spotlight";
+    content: "Digital Atelier";
     display: inline-flex;
-    padding: 6px 10px;
+    align-items: center;
+    padding: 6px 12px;
     border-radius: 999px;
-    background: rgba(30, 64, 175, 0.8);
-    color: #f8fafc;
+    background: rgba(15, 118, 110, 0.85);
+    color: #ecfeff;
     font-size: 11px;
-    letter-spacing: 1.6px;
+    letter-spacing: 1.8px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    box-shadow: 0 8px 20px rgba(13, 148, 136, 0.4);
+  }
+  .kargo-fallback-sticky__image::after {
+    content: "Sculpting immersive stories for premium brands.";
+    color: rgba(226, 232, 240, 0.8);
+    font-size: 12px;
+    letter-spacing: 0.6px;
+    max-width: 180px;
+    line-height: 1.35;
   }
   .kargo-fallback-sticky__cta {
-    background: #111827;
+    background: rgba(8, 47, 73, 0.9);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -90,24 +104,41 @@
     flex-direction: column;
     padding: 12px;
     gap: 4px;
+    border-left: 1px solid rgba(148, 163, 184, 0.25);
   }
   .kargo-fallback-sticky__cta span {
     font-size: 11px;
     letter-spacing: 2px;
+    text-transform: uppercase;
+    color: rgba(226, 232, 240, 0.75);
   }
   .kargo-fallback-sticky__cta strong {
     font-size: 16px;
-    letter-spacing: 2.2px;
+    letter-spacing: 2.4px;
+    text-transform: uppercase;
+  }
+  .kargo-fallback-sticky__cta button {
+    margin-top: 6px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    background: linear-gradient(135deg, #38bdf8, #c084fc);
+    color: #0f172a;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.6px;
+    text-transform: uppercase;
+    box-shadow: 0 10px 30px rgba(56, 189, 248, 0.45);
   }
   @media (max-width: 420px) {
     .kargo-fallback-sticky {
-      grid-template-columns: 88px 1fr;
+      grid-template-columns: 100px 1fr;
       grid-template-rows: 60% 40%;
     }
     .kargo-fallback-sticky__cta {
       grid-column: span 2;
       flex-direction: row;
-      gap: 8px;
+      gap: 10px;
     }
     .kargo-fallback-sticky__cta strong {
       font-size: 14px;
@@ -116,13 +147,14 @@
 </style>
 <div class="kargo-fallback-sticky">
   <div class="kargo-fallback-sticky__brand">
-    <span>Bonefish</span>
-    <span>Grill</span>
+    <span>Kargo</span>
+    <strong>Studio</strong>
   </div>
   <div class="kargo-fallback-sticky__image"></div>
   <div class="kargo-fallback-sticky__cta">
-    <span>Find A</span>
-    <strong>Location</strong>
+    <span>Curate Your</span>
+    <strong>Next Launch</strong>
+    <button type="button">Explore</button>
   </div>
 </div>`
       },
@@ -135,50 +167,74 @@
     width: 100%;
     height: 100%;
     border-radius: 18px;
-    background: linear-gradient(145deg, #1f2937, #0f172a 50%, #2563eb 110%);
+    background: radial-gradient(circle at 15% 20%, rgba(56, 189, 248, 0.35), transparent 55%), radial-gradient(circle at 85% 30%, rgba(251, 191, 36, 0.25), transparent 60%), #0f172a;
     color: #f8fafc;
-    font-family: "Helvetica Neue", Arial, sans-serif;
+    font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
     display: flex;
     flex-direction: column;
     justify-content: center;
-    align-items: center;
-    gap: 12px;
-    text-align: center;
+    align-items: flex-start;
+    gap: 16px;
+    text-align: left;
     border: 1px solid rgba(148, 163, 184, 0.35);
+    padding: 32px 28px;
+    position: relative;
+    overflow: hidden;
+  }
+  .kargo-fallback-middle::before {
+    content: "";
+    position: absolute;
+    inset: -60% -40% auto auto;
+    width: 220px;
+    height: 220px;
+    background: radial-gradient(circle, rgba(148, 163, 184, 0.25), transparent 60%);
+    transform: rotate(25deg);
+    opacity: 0.6;
   }
   .kargo-fallback-middle__badge {
     text-transform: uppercase;
     font-size: 12px;
-    letter-spacing: 2px;
-    padding: 6px 14px;
+    letter-spacing: 2.4px;
+    padding: 6px 16px;
     border-radius: 999px;
-    background: rgba(15, 23, 42, 0.55);
+    background: rgba(15, 23, 42, 0.65);
+    border: 1px solid rgba(148, 163, 184, 0.4);
   }
   .kargo-fallback-middle__headline {
-    font-size: 22px;
+    font-size: 26px;
     font-weight: 700;
-    letter-spacing: 1.2px;
+    letter-spacing: 1.1px;
+    line-height: 1.25;
+    max-width: 220px;
+  }
+  .kargo-fallback-middle__copy {
+    font-size: 14px;
+    color: rgba(226, 232, 240, 0.85);
+    letter-spacing: 0.2px;
+    line-height: 1.5;
+    max-width: 240px;
   }
   .kargo-fallback-middle__cta {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
-    padding: 10px 20px;
+    padding: 12px 22px;
     border-radius: 999px;
-    background: #f97316;
+    background: linear-gradient(135deg, #38bdf8, #c084fc);
     color: #0b1120;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 1.6px;
-    box-shadow: 0 10px 20px rgba(249, 115, 22, 0.35);
+    letter-spacing: 1.7px;
+    box-shadow: 0 15px 30px rgba(192, 132, 252, 0.35);
   }
 </style>
 <div class="kargo-fallback-middle">
-  <div class="kargo-fallback-middle__badge">Kargo Spotlight</div>
-  <div class="kargo-fallback-middle__headline">Immersive creative goes here</div>
-  <div class="kargo-fallback-middle__cta">Learn More</div>
+  <div class="kargo-fallback-middle__badge">Kargo Reserve</div>
+  <div class="kargo-fallback-middle__headline">Tailored storytelling for modern brands</div>
+  <p class="kargo-fallback-middle__copy">Activate premium placements engineered by Kargo Studio's design collective.</p>
+  <div class="kargo-fallback-middle__cta">Plan A Campaign</div>
 </div>`
       }
     ]

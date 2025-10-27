@@ -10,3 +10,5 @@ docs
 .claude
 extension.pem
 extension.crx
+dist
+CLAUDE.md

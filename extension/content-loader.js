@@ -1,8 +1,9 @@
 (() => {
   const SCRIPT_URL = chrome.runtime.getURL("script.js");
-  const DATA_FLAG = "kargoAdsHelperLoaded";
+  const DATA_FLAG = "kargoFunctionalHelperLoaded";
+  const KNOWN_TOOL_IDS = ["kargo-functional-tool", "kargo-ad-tool"];
 
-  const hasUI = () => Boolean(document.getElementById("kargo-ad-tool"));
+  const hasUI = () => KNOWN_TOOL_IDS.some((id) => document.getElementById(id));
 
   async function injectBundle() {
     if (hasUI()) {

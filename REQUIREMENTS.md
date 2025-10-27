@@ -102,4 +102,3 @@ This endpoint returns an object in the following format:
 
 Good luck! 🎉
 
-

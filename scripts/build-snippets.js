@@ -23,7 +23,7 @@ function buildConsoleSnippet(source) {
 }
 
 function buildBookmarklet(snippet) {
-  // The inline bookmarklet (70KB+) exceeds browser limits and gets blocked by security policies.
+  // The inline bookmarklet (70KB+) exceeds browser limits and gets blocked by security policies.`
   // Instead, create a tiny remote loader that fetches script.js from GitHub raw or CDN.
 
   // Option 1: GitHub raw URL (replace with actual repo URL)
